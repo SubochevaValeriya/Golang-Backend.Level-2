@@ -1,4 +1,4 @@
-module pwd
+module lesson4
 
 go 1.19
 

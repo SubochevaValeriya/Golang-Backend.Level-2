@@ -1,35 +1,36 @@
-version: '3.1'
-
+version: "3.7"
 services:
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana-storage:/var/lib/grafana
-  golang:
+  router:
     build:
-      context: ./
       dockerfile: Dockerfile
-    container_name: golang
-    restart: always
+      context: .
     ports:
-      - '9000:9000'
-  prometheus:
-    image: prom/prometheus:v2.24.0
-    volumes:
-      - ./prometheus/:/etc/prometheus/
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-    ports:
-      - 9090:9090
-    restart: always
+      - "8002:8000"
 
-volumes:
-  grafana-storage:
-  prometheus_data:
+  mysql:
+    image: mysql:5.7
+    environment:
+      MYSQL_ROOT_PASSWORD: test
+      MYSQL_DATABASE: test
+    ports:
+      - "8010:3306"
+
+  grafana:
+    image: grafana/grafana:6.4.4
+    environment:
+       - "GF_SECURITY_ADMIN_USER=admin"
+       - "GF_SECURITY_ADMIN_PASSWORD=password"
+    ports:
+       - "3000:3000"
+
+  node-exporter:
+    image: prom/node-exporter:v1.0.1
+    ports:
+       - "9100:9100"
+
+  prometheus:
+    image: prom/prometheus:v2.22.0
+    volumes:
+        - "./prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+    ports:
+        - "9090:9090"

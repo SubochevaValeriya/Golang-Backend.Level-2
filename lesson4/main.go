@@ -1,86 +1,96 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"log"
 	"net/http"
 	"strconv"
+	"time"
 )
+
+var duration = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+	Name:       "duration_seconds",
+	Help:       "Summary of request duration in seconds",
+	Objectives: map[float64]float64{0.9: 0.01, 0.95: 0.005, 0.99: 0.001},
+},
+	[]string{"labelHandler", "labelMethod", "labelStatus"})
+var errorsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "errors_total",
+	Help: "Total number of errors"},
+	[]string{"labelHandler", "labelMethod", "labelStatus"})
+var requestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "request_total",
+	Help: "Total number of requests"},
+	[]string{"labelHandler", "labelMethod"})
+
+var MeasurableHandler = func(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := time.Now()
+		m := r.Method
+		p := r.URL.Path
+		requestsTotal.WithLabelValues(p, m).Inc()
+		mw := NewResponseWriter(w)
+		h(mw, r)
+		if mw.Status/100 > 3 {
+			errorsTotal.WithLabelValues(p, m, strconv.Itoa(mw.Status)).Inc()
+		}
+		duration.WithLabelValues(p, m, strconv.Itoa(mw.Status)).Observe(time.Since(t).Seconds())
+	}
+}
 
 type responseWriter struct {
 	http.ResponseWriter
-	statusCode int
+	Status int
 }
 
 func NewResponseWriter(w http.ResponseWriter) *responseWriter {
 	return &responseWriter{w, http.StatusOK}
 }
 
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
-}
+var (
+	measurable = MeasurableHandler
+	router     = mux.NewRouter()
 
-var totalRequests = prometheus.NewCounterVec(
-	prometheus.CounterOpts{
-		Name: "http_requests_total",
-		Help: "Number of get requests.",
-	},
-	[]string{"path"},
+	web = http.Server{
+		Handler: router,
+	}
 )
-
-var responseStatus = prometheus.NewCounterVec(
-	prometheus.CounterOpts{
-		Name: "response_status",
-		Help: "Status of HTTP response",
-	},
-	[]string{"status"},
-)
-
-var httpDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-	Name: "http_response_time_seconds",
-	Help: "Duration of HTTP requests.",
-}, []string{"path"})
-
-func prometheusMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		route := mux.CurrentRoute(r)
-		path, _ := route.GetPathTemplate()
-
-		timer := prometheus.NewTimer(httpDuration.WithLabelValues(path))
-		rw := NewResponseWriter(w)
-		next.ServeHTTP(rw, r)
-
-		statusCode := rw.statusCode
-
-		responseStatus.WithLabelValues(strconv.Itoa(statusCode)).Inc()
-		totalRequests.WithLabelValues(path).Inc()
-
-		timer.ObserveDuration()
-	})
-}
 
 func init() {
-	prometheus.Register(totalRequests)
-	prometheus.Register(responseStatus)
-	prometheus.Register(httpDuration)
+
+	router.HandleFunc("/identity", measurable(DBMethods)).Methods(http.MethodGet)
 }
 
 func main() {
-	router := mux.NewRouter()
-	router.Use(prometheusMiddleware)
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(":9090", nil); err != http.ErrServerClosed {
+			panic(fmt.Errorf("error on listen and serve: %v", err))
+		}
+	}()
+	if err := web.ListenAndServe(); err != http.ErrServerClosed {
+		panic(fmt.Errorf("error on listen and serve: %v", err))
+	}
+}
+func DBMethods(w http.ResponseWriter, r *http.Request) {
+	db, err := sql.Open("mysql", "username:password@tcp(127.0.0.1:3306)/test")
+	if err != nil {
+		panic(err.Error())
+	}
+	defer db.Close()
 
-	// Prometheus endpoint
-	router.Path("/prometheus").Handler(promhttp.Handler())
+	sql := "INSERT INTO cities(name, population) VALUES ('Moscow', 12506000)"
+	_, err = db.Exec(sql)
+	_, err2 := db.Query("SELECT * FROM cities WHERE id = ?", 1)
 
-	// Serving static files
-	router.PathPrefix("/").Handler(http.FileServer(http.Dir("./static/")))
+	if err != nil || err2 != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
-	fmt.Println("Serving requests on port 9000")
-	err := http.ListenAndServe(":9000", router)
-	log.Fatal(err)
+	w.WriteHeader(http.StatusOK)
+	return
 }
