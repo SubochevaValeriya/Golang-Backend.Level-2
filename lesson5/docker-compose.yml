@@ -1,0 +1,29 @@
+version: '3.1'
+
+services:
+  master:
+  image: docker.io/bitnami/postgresql:12.5.0
+  ports:
+    - 8081:5432
+  environment:
+    - POSTGRESQL_REPLICATION_MODE=master
+    - POSTGRESQL_REPLICATION_USER=replicator
+    - POSTGRESQL_REPLICATION_PASSWORD=secret_password
+    - POSTGRESQL_USERNAME=test
+    - POSTGRESQL_PASSWORD=test
+    - POSTGRESQL_DATABASE=test
+    - ALLOW_EMPTY_PASSWORD=yes
+  slave:
+  image: docker.io/bitnami/postgresql:12.5.0
+  ports:
+    - 8082:5432
+  depends_on:
+    - master
+  environment:
+    - POSTGRESQL_REPLICATION_MODE=slave
+    - POSTGRESQL_REPLICATION_USER=replicator
+    - POSTGRESQL_REPLICATION_PASSWORD=secret_password
+    - POSTGRESQL_MASTER_HOST=master
+    - POSTGRESQL_MASTER_PORT_NUMBER=5432
+    - POSTGRESQL_PASSWORD=test
+    - ALLOW_EMPTY_PASSWORD=yes
